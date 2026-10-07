@@ -135,8 +135,6 @@ function roomPayload(room, userNames = []) {
     };
   });
 
-  const isAnyActive = statuses.some(s => s && s.active);
-
   return {
     id: String(room._id), code: room.code, name: room.name,
     owner: room.owner ? String(room.owner) : "",
@@ -146,8 +144,6 @@ function roomPayload(room, userNames = []) {
     bothActive: !!room.bothActiveStartedAt,
     bothActiveStartedAt: room.bothActiveStartedAt,
     bothActiveAccumulatedMs: room.bothActiveAccumulatedMs || 0,
-    isRunning: isAnyActive || !!room.bothActiveStartedAt,
-    accumulatedMs: sharedTotalMs,
     dailyGoalMinutes: room.dailyGoalMinutes || 120,
     weeklyGoalHours: room.weeklyGoalHours || 20,
     createdAt: room.createdAt
@@ -360,6 +356,25 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
         }
       });
       room.events.push({ userId: req.user.id, type: "finish", at: new Date() });
+    } else if (action === "reset") {
+      if (String(room.owner) !== String(req.user.id)) {
+        return res.status(403).json({ error: "Only the room creator can reset the room timer." });
+      }
+      room.bothActiveAccumulatedMs = 0;
+      room.bothActiveStartedAt = null;
+      room.accumulatedMs = 0;
+      room.activeStartedAt = null;
+      room.isRunning = false;
+      (room.statuses || []).forEach(s => {
+        if (s) {
+          s.active = false;
+          s.startedAt = null;
+          s.lastStartedAt = null;
+          s.accumulatedMs = 0;
+          s.startCount = 0;
+        }
+      });
+      room.events.push({ userId: req.user.id, type: "reset", at: new Date() });
     } else {
       return res.status(400).json({ error: "Unknown timer action." });
     }
@@ -452,7 +467,7 @@ io.on("connection", socket => {
       socket.join(`room:${result.room.code}`);
       socket.emit("room:update", roomPayload(result.room, await memberNames(result.room)));
       socket.to(`room:${result.room.code}`).emit("room:presence", { name: socket.user.name, status: "joined" });
-    } catch {}
+    } catch { }
   });
 });
 

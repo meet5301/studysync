@@ -216,6 +216,8 @@ function renderRoom() {
   }
   $("#start-btn").classList.toggle("hidden", myActive);
   $("#pause-btn").classList.toggle("hidden", !myActive);
+  const resetBtn = $("#reset-btn");
+  if (resetBtn) resetBtn.classList.toggle("hidden", !isOwner || (!mySec && !buddySec && !sharedSec && !myActive && !buddyActive));
   $("#finish-btn").classList.toggle("hidden", !mySec && !buddySec && !sharedSec && !myActive && !buddyActive);
 
   if (myActive && buddyActive) {
@@ -364,11 +366,18 @@ async function timerAction(action) {
     const { room } = await api(`/api/rooms/${state.room.code}/timer`, { method: "POST", body: JSON.stringify({ action }) });
     state.room = room; renderRoom();
     if (action === "finish") { await refreshStats(); toast("Session saved. Every little bit counts 🌷"); }
+    else if (action === "reset") { await refreshStats(); toast("Room timer reset to 00:00:00 🔄"); }
     else toast(action === "start" ? "Your timer started 🌱" : "Your timer paused.");
   } catch (e) { toast(e.message, true); }
 }
 $("#start-btn").addEventListener("click", () => timerAction("start"));
 $("#pause-btn").addEventListener("click", () => timerAction("pause"));
+const resetBtn = $("#reset-btn");
+if (resetBtn) {
+  resetBtn.addEventListener("click", () => {
+    if (confirm("Reset all room timers and water progress to 00:00:00?")) timerAction("reset");
+  });
+}
 $("#finish-btn").addEventListener("click", () => {
   if (confirm("Finish and save this shared session?")) timerAction("finish");
 });
