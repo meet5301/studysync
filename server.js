@@ -84,27 +84,35 @@ function roomPayload(room, userNames = []) {
   const runningMs = room.isRunning && room.activeStartedAt
     ? Date.now() - new Date(room.activeStartedAt).getTime() : 0;
   const totalMs = Math.max(0, (room.accumulatedMs || 0) + runningMs);
+  const statuses = Array.isArray(room.statuses) ? room.statuses : [];
   return {
     id: String(room._id), code: room.code, name: room.name,
-    owner: String(room.owner),
-    memberCount: room.members.length,
-    members: userNames.map(u => ({ ...u, active: (room.statuses || []).some(s => String(s.userId) === u.id && s.active) })),
-    isRunning: room.isRunning,
+    owner: room.owner ? String(room.owner) : "",
+    memberCount: (room.members || []).length,
+    members: userNames.map(u => ({
+      ...u,
+      active: statuses.some(s => s && s.userId && String(s.userId) === u.id && s.active)
+    })),
+    isRunning: !!room.isRunning,
     accumulatedMs: room.accumulatedMs || 0,
     totalMs,
     activeStartedAt: room.activeStartedAt,
-    dailyGoalMinutes: room.dailyGoalMinutes,
-    weeklyGoalHours: room.weeklyGoalHours,
+    dailyGoalMinutes: room.dailyGoalMinutes || 120,
+    weeklyGoalHours: room.weeklyGoalHours || 20,
     createdAt: room.createdAt
   };
 }
 async function getRoomForUser(code, userId) {
-  const room = await Room.findOne({ code: String(code).toUpperCase() });
+  const cleanCode = String(code || "").trim().toUpperCase();
+  const room = await Room.findOne({ code: cleanCode });
   if (!room) return { error: "Room code not found." };
-  if (!room.members.some(m => String(m) === String(userId))) return { error: "You are not a member of this room." };
+  if (!room.members || !room.members.some(m => m && String(m) === String(userId))) {
+    return { error: "You are not a member of this room." };
+  }
   return { room };
 }
 async function memberNames(room) {
+  if (!room.members || !room.members.length) return [];
   const users = await User.find({ _id: { $in: room.members } }).select("name");
   return users.map(u => ({ id: String(u._id), name: u.name }));
 }
@@ -154,12 +162,17 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 app.get("/api/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id).select("name email");
-  if (!user) return res.status(404).json({ error: "Account not found." });
-  const rooms = await Room.find({ members: user._id }).sort({ createdAt: -1 }).limit(20);
-  const result = [];
-  for (const room of rooms) result.push(roomPayload(room, await memberNames(room)));
-  res.json({ user: safeUser(user), rooms: result });
+  try {
+    const user = await User.findById(req.user.id).select("name email");
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    const rooms = await Room.find({ members: user._id }).sort({ createdAt: -1 }).limit(20);
+    const result = [];
+    for (const room of rooms) result.push(roomPayload(room, await memberNames(room)));
+    res.json({ user: safeUser(user), rooms: result });
+  } catch (err) {
+    console.error("api/me error:", err);
+    res.status(500).json({ error: "Could not fetch user data." });
+  }
 });
 
 app.post("/api/rooms", auth, async (req, res) => {
@@ -177,7 +190,8 @@ app.post("/api/rooms", auth, async (req, res) => {
       weeklyGoalHours: Math.min(100, Math.max(1, Number(req.body.weeklyGoalHours) || 20))
     });
     res.json({ room: roomPayload(room, await memberNames(room)) });
-  } catch {
+  } catch (err) {
+    console.error("Create room error:", err);
     res.status(500).json({ error: "Could not create a room." });
   }
 });
@@ -188,17 +202,20 @@ app.post("/api/rooms/join", auth, async (req, res) => {
     if (!/^[A-F0-9]{8}$/.test(code)) return res.status(400).json({ error: "Enter the 8-character room code." });
     const room = await Room.findOne({ code });
     if (!room) return res.status(404).json({ error: "Room not found. Check the code and try again." });
-    const already = room.members.some(m => String(m) === String(req.user.id));
+    if (!Array.isArray(room.members)) room.members = [];
+    if (!Array.isArray(room.statuses)) room.statuses = [];
+
+    const already = room.members.some(m => m && String(m) === String(req.user.id));
     if (!already && room.members.length >= 2) return res.status(400).json({ error: "This room is full (2 members maximum)." });
     if (!already) {
       room.members.push(req.user.id);
-      if (!room.statuses) room.statuses = [];
       room.statuses.push({ userId: req.user.id, active: false });
     }
     await room.save();
     res.json({ room: roomPayload(room, await memberNames(room)) });
     await broadcastRoom(room);
-  } catch {
+  } catch (err) {
+    console.error("Join room error:", err);
     res.status(500).json({ error: "Could not join room." });
   }
 });
@@ -215,32 +232,35 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
     if (result.error) return res.status(403).json({ error: result.error });
     const room = result.room;
     const action = String(req.body.action || "");
-    if (!room.statuses) room.statuses = [];
+    if (!Array.isArray(room.statuses)) room.statuses = [];
+    if (!Array.isArray(room.events)) room.events = [];
+    if (!Array.isArray(room.members)) room.members = [];
+
     if (action === "start") {
-      let status = room.statuses.find(s => String(s.userId) === String(req.user.id));
+      let status = room.statuses.find(s => s && s.userId && String(s.userId) === String(req.user.id));
       if (!status) {
         status = { userId: req.user.id, active: true };
         room.statuses.push(status);
       } else {
         status.active = true;
       }
-      room.events.push({ userId: req.user.id, type: "start" });
+      room.events.push({ userId: req.user.id, type: "start", at: new Date() });
       const allActive = room.members.length >= 1 && room.members.every(memberId =>
-        room.statuses.some(s => String(s.userId) === String(memberId) && s.active)
+        room.statuses.some(s => s && s.userId && String(s.userId) === String(memberId) && s.active)
       );
       if (allActive && !room.isRunning) {
         room.isRunning = true;
         room.activeStartedAt = new Date();
       }
     } else if (action === "pause") {
-      let status = room.statuses.find(s => String(s.userId) === String(req.user.id));
+      let status = room.statuses.find(s => s && s.userId && String(s.userId) === String(req.user.id));
       if (status) status.active = false;
       if (room.isRunning) {
         await persistRunningTime(room);
         room.isRunning = false;
         room.activeStartedAt = null;
       }
-      room.events.push({ userId: req.user.id, type: "pause" });
+      room.events.push({ userId: req.user.id, type: "pause", at: new Date() });
     } else if (action === "finish") {
       if (room.isRunning) await persistRunningTime(room);
       const duration = Math.floor((room.accumulatedMs || 0) / 1000);
@@ -250,16 +270,17 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
       room.accumulatedMs = 0;
       room.activeStartedAt = null;
       room.isRunning = false;
-      room.statuses.forEach(s => { s.active = false; });
-      room.events.push({ userId: req.user.id, type: "finish" });
+      room.statuses.forEach(s => { if (s) s.active = false; });
+      room.events.push({ userId: req.user.id, type: "finish", at: new Date() });
     } else {
       return res.status(400).json({ error: "Unknown timer action." });
     }
     await room.save();
     await broadcastRoom(room);
     res.json({ room: roomPayload(room, await memberNames(room)) });
-  } catch {
-    res.status(500).json({ error: "Timer action failed." });
+  } catch (err) {
+    console.error("Timer action error:", err);
+    res.status(500).json({ error: err.message || "Timer action failed." });
   }
 });
 
@@ -275,19 +296,20 @@ app.delete("/api/rooms/:code/members/:targetUserId", auth, async (req, res) => {
     if (targetUserId === String(req.user.id)) {
       return res.status(400).json({ error: "You cannot delete yourself from your room." });
     }
-    if (!room.members.some(m => String(m) === targetUserId)) {
+    if (!room.members || !room.members.some(m => m && String(m) === targetUserId)) {
       return res.status(404).json({ error: "Member not found in this room." });
     }
-    room.members = room.members.filter(m => String(m) !== targetUserId);
-    room.statuses = (room.statuses || []).filter(s => String(s.userId) !== targetUserId);
+    room.members = room.members.filter(m => m && String(m) !== targetUserId);
+    room.statuses = (room.statuses || []).filter(s => s && s.userId && String(s.userId) !== targetUserId);
     if (room.isRunning) {
       await persistRunningTime(room);
     }
     await room.save();
     await broadcastRoom(room);
     res.json({ room: roomPayload(room, await memberNames(room)) });
-  } catch {
-    res.status(500).json({ error: "Could not remove member." });
+  } catch (err) {
+    console.error("Delete member error:", err);
+    res.status(500).json({ error: err.message || "Could not remove member." });
   }
 });
 
