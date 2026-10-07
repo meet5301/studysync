@@ -109,8 +109,19 @@ async function openRoom(code) {
     if (state.socket) state.socket.disconnect();
     state.socket = io({ auth: { token: state.token } });
     state.socket.on("connect", () => state.socket.emit("room:join", code));
-    state.socket.on("room:update", incoming => {
-      if (state.room && incoming.code === state.room.code) { state.room = incoming; renderRoom(); }
+    state.socket.on("room:update", async incoming => {
+      if (state.room && incoming.code === state.room.code) {
+        if (!incoming.members.some(m => m.id === state.user.id)) {
+          toast("You were removed from this room by the creator.", true);
+          $("#room-view").classList.add("hidden"); $("#room-chooser").classList.remove("hidden");
+          sessionStorage.removeItem("studysync_last_room");
+          if (state.socket) { state.socket.disconnect(); state.socket = null; }
+          state.room = null; clearInterval(state.timerInterval);
+          await loadDashboard();
+          return;
+        }
+        state.room = incoming; renderRoom();
+      }
     });
     state.socket.on("room:presence", data => toast(`${data.name} opened the study garden 🌷`));
     state.socket.on("app:error", err => toast(err, true));
@@ -126,12 +137,18 @@ function durationText(seconds, compact = false) {
 }
 function currentMs() {
   if (!state.room) return 0;
-  return state.room.totalMs || 0;
+  let ms = Number(state.room.accumulatedMs || 0);
+  if (state.room.isRunning && state.room.activeStartedAt) {
+    const elapsed = Date.now() - new Date(state.room.activeStartedAt).getTime();
+    if (elapsed > 0) ms += elapsed;
+  }
+  return ms;
 }
 function renderRoom() {
   if (!state.room) return;
   const r = state.room, members = r.members || [];
   const buddy = members.find(m => m.id !== state.user.id);
+  const isOwner = String(r.owner) === String(state.user.id);
   $("#room-name").textContent = r.name; $("#room-code").textContent = r.code;
   $("#room-status").textContent = r.isRunning ? "Shared focus is growing" : (buddy ? "Ready when you both are" : "Invite your buddy to begin");
   $("#buddy-name").textContent = buddy ? buddy.name : "Your study buddy";
@@ -145,6 +162,16 @@ function renderRoom() {
   $("#my-pill").className = "status-pill " + (r.isRunning && myActive ? "live" : (myActive ? "paused" : "idle"));
   $("#buddy-pill").textContent = buddy ? (buddyActive ? (r.isRunning ? "Focusing" : "Ready") : "Not started") : "Waiting";
   $("#buddy-pill").className = "status-pill " + (r.isRunning && buddyActive ? "live" : (buddyActive ? "paused" : "idle"));
+  const kickBtn = $("#kick-buddy-btn");
+  if (kickBtn) {
+    if (isOwner && buddy) {
+      kickBtn.classList.remove("hidden");
+      kickBtn.dataset.buddyId = buddy.id;
+      kickBtn.dataset.buddyName = buddy.name;
+    } else {
+      kickBtn.classList.add("hidden");
+    }
+  }
   $("#start-btn").classList.toggle("hidden", myActive);
   $("#pause-btn").classList.toggle("hidden", !myActive);
   $("#finish-btn").classList.toggle("hidden", !r.totalMs && !r.isRunning);
@@ -208,6 +235,21 @@ $("#pause-btn").addEventListener("click", () => timerAction("pause"));
 $("#finish-btn").addEventListener("click", () => {
   if (confirm("Finish and save this shared session?")) timerAction("finish");
 });
+const kickBtn = $("#kick-buddy-btn");
+if (kickBtn) {
+  kickBtn.addEventListener("click", async () => {
+    const buddyId = kickBtn.dataset.buddyId;
+    const buddyName = kickBtn.dataset.buddyName || "member";
+    if (!buddyId || !state.room) return;
+    if (confirm(`Remove ${buddyName} from this room?`)) {
+      try {
+        const { room } = await api(`/api/rooms/${state.room.code}/members/${buddyId}`, { method: "DELETE" });
+        state.room = room; renderRoom();
+        toast(`${buddyName} was removed from the room.`);
+      } catch (err) { toast(err.message, true); }
+    }
+  });
+}
 $("#settings-form").addEventListener("submit", async e => {
   e.preventDefault();
   const form = Object.fromEntries(new FormData(e.currentTarget).entries());

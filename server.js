@@ -83,12 +83,14 @@ function safeUser(user) {
 function roomPayload(room, userNames = []) {
   const runningMs = room.isRunning && room.activeStartedAt
     ? Date.now() - new Date(room.activeStartedAt).getTime() : 0;
-  const totalMs = Math.max(0, room.accumulatedMs + runningMs);
+  const totalMs = Math.max(0, (room.accumulatedMs || 0) + runningMs);
   return {
     id: String(room._id), code: room.code, name: room.name,
+    owner: String(room.owner),
     memberCount: room.members.length,
     members: userNames.map(u => ({ ...u, active: (room.statuses || []).some(s => String(s.userId) === u.id && s.active) })),
     isRunning: room.isRunning,
+    accumulatedMs: room.accumulatedMs || 0,
     totalMs,
     activeStartedAt: room.activeStartedAt,
     dailyGoalMinutes: room.dailyGoalMinutes,
@@ -111,11 +113,11 @@ async function broadcastRoom(room) {
   io.to(`room:${room.code}`).emit("room:update", roomPayload(room, names));
 }
 async function totalRoomMs(room) {
-  return Math.max(0, room.accumulatedMs + (room.isRunning && room.activeStartedAt ? Date.now() - new Date(room.activeStartedAt).getTime() : 0));
+  return Math.max(0, (room.accumulatedMs || 0) + (room.isRunning && room.activeStartedAt ? Date.now() - new Date(room.activeStartedAt).getTime() : 0));
 }
 async function persistRunningTime(room) {
   if (room.isRunning && room.activeStartedAt) {
-    room.accumulatedMs += Math.max(0, Date.now() - new Date(room.activeStartedAt).getTime());
+    room.accumulatedMs = (room.accumulatedMs || 0) + Math.max(0, Date.now() - new Date(room.activeStartedAt).getTime());
     room.activeStartedAt = new Date();
   }
 }
@@ -187,8 +189,12 @@ app.post("/api/rooms/join", auth, async (req, res) => {
     const room = await Room.findOne({ code });
     if (!room) return res.status(404).json({ error: "Room not found. Check the code and try again." });
     const already = room.members.some(m => String(m) === String(req.user.id));
-    if (!already && room.members.length >= 10) return res.status(400).json({ error: "This room is full (10 members maximum)." });
-    if (!already) { room.members.push(req.user.id); room.statuses.push({ userId: req.user.id, active: false }); }
+    if (!already && room.members.length >= 2) return res.status(400).json({ error: "This room is full (2 members maximum)." });
+    if (!already) {
+      room.members.push(req.user.id);
+      if (!room.statuses) room.statuses = [];
+      room.statuses.push({ userId: req.user.id, active: false });
+    }
     await room.save();
     res.json({ room: roomPayload(room, await memberNames(room)) });
     await broadcastRoom(room);
@@ -209,11 +215,17 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
     if (result.error) return res.status(403).json({ error: result.error });
     const room = result.room;
     const action = String(req.body.action || "");
+    if (!room.statuses) room.statuses = [];
     if (action === "start") {
-      const status = room.statuses.find(s => String(s.userId) === String(req.user.id));
-      if (status) status.active = true;
+      let status = room.statuses.find(s => String(s.userId) === String(req.user.id));
+      if (!status) {
+        status = { userId: req.user.id, active: true };
+        room.statuses.push(status);
+      } else {
+        status.active = true;
+      }
       room.events.push({ userId: req.user.id, type: "start" });
-      const allActive = room.members.length >= 2 && room.members.every(memberId =>
+      const allActive = room.members.length >= 1 && room.members.every(memberId =>
         room.statuses.some(s => String(s.userId) === String(memberId) && s.active)
       );
       if (allActive && !room.isRunning) {
@@ -221,7 +233,7 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
         room.activeStartedAt = new Date();
       }
     } else if (action === "pause") {
-      const status = room.statuses.find(s => String(s.userId) === String(req.user.id));
+      let status = room.statuses.find(s => String(s.userId) === String(req.user.id));
       if (status) status.active = false;
       if (room.isRunning) {
         await persistRunningTime(room);
@@ -231,7 +243,7 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
       room.events.push({ userId: req.user.id, type: "pause" });
     } else if (action === "finish") {
       if (room.isRunning) await persistRunningTime(room);
-      const duration = Math.floor(room.accumulatedMs / 1000);
+      const duration = Math.floor((room.accumulatedMs || 0) / 1000);
       if (duration > 0) {
         await StudySession.create({ room: room._id, startedAt: new Date(Date.now() - duration * 1000), endedAt: new Date(), durationSeconds: duration, members: room.members });
       }
@@ -240,7 +252,7 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
       room.isRunning = false;
       room.statuses.forEach(s => { s.active = false; });
       room.events.push({ userId: req.user.id, type: "finish" });
-    } else if (!["start", "pause", "finish"].includes(action)) {
+    } else {
       return res.status(400).json({ error: "Unknown timer action." });
     }
     await room.save();
@@ -248,6 +260,34 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
     res.json({ room: roomPayload(room, await memberNames(room)) });
   } catch {
     res.status(500).json({ error: "Timer action failed." });
+  }
+});
+
+app.delete("/api/rooms/:code/members/:targetUserId", auth, async (req, res) => {
+  try {
+    const result = await getRoomForUser(req.params.code, req.user.id);
+    if (result.error) return res.status(403).json({ error: result.error });
+    const room = result.room;
+    if (String(room.owner) !== String(req.user.id)) {
+      return res.status(403).json({ error: "Only the room creator can delete members." });
+    }
+    const targetUserId = String(req.params.targetUserId);
+    if (targetUserId === String(req.user.id)) {
+      return res.status(400).json({ error: "You cannot delete yourself from your room." });
+    }
+    if (!room.members.some(m => String(m) === targetUserId)) {
+      return res.status(404).json({ error: "Member not found in this room." });
+    }
+    room.members = room.members.filter(m => String(m) !== targetUserId);
+    room.statuses = (room.statuses || []).filter(s => String(s.userId) !== targetUserId);
+    if (room.isRunning) {
+      await persistRunningTime(room);
+    }
+    await room.save();
+    await broadcastRoom(room);
+    res.json({ room: roomPayload(room, await memberNames(room)) });
+  } catch {
+    res.status(500).json({ error: "Could not remove member." });
   }
 });
 
