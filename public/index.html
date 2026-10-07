@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6fbf7">
+  <title>StudySync — Grow together</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+  <header class="topbar">
+    <a class="brand" href="#"><span class="brand-mark">✿</span><span>study<span class="brand-light">sync</span><small>GROW TOGETHER</small></span></a>
+    <div id="header-user" class="header-user hidden"><span class="online-dot"></span><span id="header-name"></span><button class="icon-button" id="logout-btn" title="Sign out">↗</button></div>
+  </header>
+
+  <main>
+    <section id="auth-view" class="auth-layout">
+      <div class="hero-copy">
+        <div class="eyebrow"><span>✦</span> A LITTLE ACCOUNTABILITY GOES A LONG WAY</div>
+        <h1>Small focus.<br><span class="gradient-text">Big growth.</span></h1>
+        <p class="hero-sub">A softer way to stay focused. Study side by side, fill your shared water garden, and grow your goals together.</p>
+        <div class="hero-pills"><span>♡ Study buddies</span><span>♧ Shared progress</span><span>☼ Gentle motivation</span></div>
+        <div class="auth-art">
+          <div class="sun"></div><div class="cloud cloud-a"></div><div class="cloud cloud-b"></div>
+          <div class="hill hill-back"></div><div class="hill hill-front"></div>
+          <div class="plant plant-a"><i></i><b></b><span></span></div>
+          <div class="plant plant-b"><i></i><b></b><span></span></div>
+          <div class="art-card"><span class="art-heart">♡</span><strong>Better, together.</strong><small>One focused minute at a time.</small></div>
+        </div>
+      </div>
+      <div class="auth-card">
+        <div class="auth-tabs"><button class="auth-tab active" data-tab="login">Welcome back</button><button class="auth-tab" data-tab="register">Create account</button></div>
+        <div id="auth-message" class="message hidden"></div>
+        <form id="login-form" class="auth-form">
+          <h2>Let's grow 🌱</h2><p class="muted">Sign in to meet your study buddy.</p>
+          <label>Email address<input name="email" type="email" placeholder="you@example.com" required autocomplete="email"></label>
+          <label>Password<input name="password" type="password" placeholder="Your password" required minlength="8" autocomplete="current-password"></label>
+          <button class="primary-button full" type="submit">Sign in <span>→</span></button>
+          <p class="form-note">New to StudySync? <button type="button" class="text-button" data-tab="register">Create an account</button></p>
+        </form>
+        <form id="register-form" class="auth-form hidden">
+          <h2>Plant your first seed 🌷</h2><p class="muted">Make an account to start your shared garden.</p>
+          <label>Your name<input name="name" placeholder="What should we call you?" required minlength="2" maxlength="32" autocomplete="name"></label>
+          <label>Email address<input name="email" type="email" placeholder="you@example.com" required autocomplete="email"></label>
+          <label>Password<input name="password" type="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password"></label>
+          <button class="primary-button full" type="submit">Create my account <span>→</span></button>
+          <p class="form-note">Already have an account? <button type="button" class="text-button" data-tab="login">Sign in</button></p>
+        </form>
+        <div class="privacy-note">♡ Your focus is personal. Your progress is shared only with your room.</div>
+      </div>
+    </section>
+
+    <section id="app-view" class="hidden">
+      <div class="welcome-row"><div><div class="eyebrow">YOUR LITTLE CORNER OF CALM</div><h1>Hey, <span id="welcome-name">friend</span> <span class="wave">✿</span></h1><p class="muted">Every minute you show up is a little win.</p></div><div class="date-chip"><span>☼</span><div><small>TODAY IS</small><strong id="today-date"></strong></div></div></div>
+      <div id="notice" class="message hidden"></div>
+      <div id="room-chooser" class="room-chooser">
+        <div class="section-heading"><div><h2>Your study spaces</h2><p class="muted">Make a room or join your buddy with their secret code.</p></div><span class="tiny-flower">✿</span></div>
+        <div class="room-actions">
+          <form id="create-room-form" class="action-card create-card"><div class="action-icon mint">✿</div><h3>Create a private room</h3><p>Get a unique code to share with your study buddy.</p><label>Room name<input name="name" maxlength="60" placeholder="e.g. The Study Garden"></label><button class="primary-button full" type="submit">Create my room <span>→</span></button></form>
+          <form id="join-room-form" class="action-card join-card"><div class="action-icon pink">⌘</div><h3>Join a room</h3><p>Enter the 8-character code your buddy shared with you.</p><label>Room invite code<input name="code" placeholder="A1B2C3D4" maxlength="8" required class="code-input" autocomplete="off"></label><button class="secondary-button full" type="submit">Join our garden <span>→</span></button></form>
+        </div>
+        <div id="existing-rooms-wrap" class="existing-wrap hidden"><h3>Recently visited</h3><div id="existing-rooms" class="existing-rooms"></div></div>
+      </div>
+
+      <div id="room-view" class="hidden">
+        <div class="room-toolbar"><button id="back-rooms" class="back-button">← All rooms</button><div class="room-title"><span class="live-leaf">✿</span><div><h2 id="room-name">Our little study garden</h2><p><span class="online-dot"></span> <span id="room-status">Waiting for your buddy</span></p></div></div><button id="share-code" class="code-share">Invite <span id="room-code">────────</span> ⧉</button></div>
+        <div class="dashboard-grid">
+          <section class="panel garden-panel">
+            <div class="panel-heading"><div><span class="eyebrow">OUR SHARED PROGRESS</span><h2>Growing together</h2></div><span class="season-chip">🌱 In bloom</span></div>
+            <div class="garden-scene">
+              <div class="scene-sun">☼</div><div class="scene-cloud cloud-left"></div><div class="scene-cloud cloud-right"></div>
+              <div class="scene-hill hill-one"></div><div class="scene-hill hill-two"></div>
+              <div class="water-glass-wrap">
+                <svg class="water-glass" viewBox="0 0 190 230" role="img" aria-label="Shared water progress">
+                  <defs><clipPath id="glassClip"><path d="M35 24 L155 24 L143 194 Q140 207 127 207 L63 207 Q50 207 47 194 Z"/></clipPath><linearGradient id="waterGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8de0e9"/><stop offset="100%" stop-color="#55b8d2"/></linearGradient></defs>
+                  <g clip-path="url(#glassClip)"><rect id="water-fill" x="25" y="205" width="140" height="0" fill="url(#waterGradient)"/><path id="water-wave" d="" fill="#a4edf0" opacity=".7"/></g>
+                  <path d="M35 24 L155 24 L143 194 Q140 207 127 207 L63 207 Q50 207 47 194 Z" fill="rgba(255,255,255,.35)" stroke="#80b9c3" stroke-width="3" stroke-linejoin="round"/>
+                  <path d="M42 34 L148 34" stroke="white" stroke-width="4" stroke-linecap="round" opacity=".8"/>
+                  <path d="M52 57 L60 174" stroke="white" stroke-width="5" stroke-linecap="round" opacity=".45"/>
+                  <circle cx="119" cy="87" r="4" fill="white" opacity=".65"/><circle cx="105" cy="115" r="2.8" fill="white" opacity=".65"/><circle cx="126" cy="148" r="3.5" fill="white" opacity=".65"/>
+                  <path d="M72 137 Q86 121 100 137 Q114 153 128 137" fill="none" stroke="white" stroke-width="2" opacity=".5"/>
+                </svg>
+                <div class="glass-sparkle sparkle-a">✦</div><div class="glass-sparkle sparkle-b">✧</div>
+              </div>
+              <div class="garden-ground"></div>
+              <div class="ground-flower flower-left">✿</div><div class="ground-flower flower-right">✿</div>
+              <div class="garden-caption"><span id="glass-stage">THE DAILY GLASS</span><strong id="water-percent">0%</strong><small id="water-caption">Every shared minute helps us grow.</small></div>
+            </div>
+            <div class="water-stats"><div><span class="stat-icon aqua">◷</span><div><small>SHARED TODAY</small><strong id="today-time">0m</strong></div></div><div><span class="stat-icon peach">♧</span><div><small>THIS WEEK</small><strong id="week-time">0h 0m</strong></div></div><div><span class="stat-icon lilac">♡</span><div><small>ALL-TIME</small><strong id="all-time">0h 0m</strong></div></div></div>
+          </section>
+
+          <section class="panel timer-panel">
+            <div class="panel-heading"><div><span class="eyebrow">A MOMENT FOR YOU</span><h2>Focus session</h2></div><span class="timer-flower">✿</span></div>
+            <div class="buddy-row">
+              <div class="buddy-avatar avatar-mint" id="my-avatar">Y</div><div class="buddy-info"><strong id="my-name">You</strong><small id="my-state">Ready when you are</small></div><span class="status-pill idle" id="my-pill">Ready</span>
+            </div>
+            <div class="buddy-row">
+              <div class="buddy-avatar avatar-pink" id="buddy-avatar">♡</div><div class="buddy-info"><strong id="buddy-name">Your buddy</strong><small id="buddy-state">Waiting to join</small></div><span class="status-pill idle" id="buddy-pill">Waiting</span>
+            </div>
+            <div class="timer-circle"><div class="timer-inner"><span class="timer-leaf">✿</span><strong id="timer-display">00:00:00</strong><small id="timer-label">READY TO FOCUS</small></div></div>
+            <p id="timer-hint" class="timer-hint">Your shared timer starts when you begin.</p>
+            <div class="timer-buttons"><button id="start-btn" class="primary-button">▶ Start focus</button><button id="pause-btn" class="secondary-button hidden">Ⅱ Pause</button><button id="finish-btn" class="icon-button finish-btn hidden" title="Finish session">✓</button></div>
+            <div class="together-note"><span>♡</span> Water fills when you study together.</div>
+          </section>
+        </div>
+        <div class="lower-grid">
+          <section class="panel milestones-panel"><div class="panel-heading"><div><span class="eyebrow">LITTLE BY LITTLE</span><h2>Our milestones</h2></div><span class="milestone-icon">♧</span></div>
+            <div class="milestone-list"><div class="milestone"><div class="milestone-art glass-mini">♧</div><div class="milestone-info"><strong>Daily glass</strong><small id="daily-milestone-text">Build today's focus habit</small><div class="progress-track"><span id="daily-progress"></span></div></div><b id="daily-percent">0%</b></div>
+            <div class="milestone"><div class="milestone-art barrel-mini">▤</div><div class="milestone-info"><strong>Weekly barrel</strong><small id="weekly-milestone-text">Little sessions add up</small><div class="progress-track pink-track"><span id="weekly-progress"></span></div></div><b id="weekly-percent">0%</b></div>
+            <div class="milestone"><div class="milestone-art tank-mini">▥</div><div class="milestone-info"><strong>Monthly reservoir</strong><small id="monthly-milestone-text">A month of showing up</small><div class="progress-track blue-track"><span id="monthly-progress"></span></div></div><b id="monthly-percent">0%</b></div></div>
+          </section>
+          <section class="panel settings-panel"><div class="panel-heading"><div><span class="eyebrow">MAKE IT YOURS</span><h2>Garden goals</h2></div><span class="settings-icon">⚙</span></div><form id="settings-form" class="settings-form"><label>Daily shared goal <div class="input-suffix"><input type="number" name="dailyGoalMinutes" min="15" max="720" value="120" required><span>minutes</span></div></label><label>Weekly shared goal <div class="input-suffix"><input type="number" name="weeklyGoalHours" min="1" max="100" value="20" required><span>hours</span></div></label><button class="secondary-button full" type="submit">Save goals</button><small class="muted">Only the room creator can change goals.</small></form></section>
+        </div>
+        <section class="panel history-panel"><div class="panel-heading"><div><span class="eyebrow">PROGRESS YOU CAN FEEL</span><h2>Recent sessions</h2></div><span class="history-flower">✧</span></div><div id="session-history" class="session-history"><div class="empty-history">Your completed focus sessions will bloom here. 🌷</div></div></section>
+        <footer class="app-footer">Made with care, one focused minute at a time <span>♡</span></footer>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/socket.io/socket.io.js"></script><script src="/app.js"></script>
+</body>
+</html>
