@@ -48,6 +48,8 @@ const roomSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   activeStartedAt: { type: Date, default: null },
   accumulatedMs: { type: Number, default: 0 },
+  bothActiveStartedAt: { type: Date, default: null },
+  bothActiveAccumulatedMs: { type: Number, default: 0 },
   isRunning: { type: Boolean, default: false },
   dailyGoalMinutes: { type: Number, default: 120 },
   weeklyGoalHours: { type: Number, default: 20 },
@@ -87,30 +89,61 @@ function auth(req, res, next) {
 function safeUser(user) {
   return { id: String(user._id), name: user.name, email: user.email };
 }
-function roomPayload(room, userNames = []) {
-  const runningMs = room.isRunning && room.activeStartedAt
-    ? Date.now() - new Date(room.activeStartedAt).getTime() : 0;
-  const totalMs = Math.max(0, (room.accumulatedMs || 0) + runningMs);
+function updateBothActiveState(room) {
   const statuses = Array.isArray(room.statuses) ? room.statuses : [];
+  const members = Array.isArray(room.members) ? room.members : [];
+  const activeCount = statuses.filter(s => s && s.active).length;
+  const isBothActive = members.length >= 2 ? activeCount >= 2 : activeCount >= 1;
+  const now = new Date();
+
+  if (isBothActive) {
+    if (!room.bothActiveStartedAt) {
+      room.bothActiveStartedAt = now;
+    }
+  } else {
+    if (room.bothActiveStartedAt) {
+      const elapsed = now.getTime() - new Date(room.bothActiveStartedAt).getTime();
+      room.bothActiveAccumulatedMs = (room.bothActiveAccumulatedMs || 0) + Math.max(0, elapsed);
+      room.bothActiveStartedAt = null;
+    }
+  }
+}
+
+function roomPayload(room, userNames = []) {
+  const statuses = Array.isArray(room.statuses) ? room.statuses : [];
+  const members = Array.isArray(room.members) ? room.members : [];
+  const runningSharedMs = room.bothActiveStartedAt
+    ? Math.max(0, Date.now() - new Date(room.bothActiveStartedAt).getTime()) : 0;
+  const sharedTotalMs = Math.max(0, (room.bothActiveAccumulatedMs || 0) + runningSharedMs);
+
+  const mappedMembers = userNames.map(u => {
+    const s = statuses.find(st => st && st.userId && String(st.userId) === u.id);
+    const active = !!(s && s.active);
+    const startedAt = s && s.startedAt ? s.startedAt : null;
+    const accumulatedMs = s && s.accumulatedMs ? s.accumulatedMs : 0;
+    const runningMs = active && startedAt ? Math.max(0, Date.now() - new Date(startedAt).getTime()) : 0;
+    const userTotalMs = Math.max(0, accumulatedMs + runningMs);
+
+    return {
+      ...u,
+      active,
+      startedAt,
+      lastStartedAt: s && s.lastStartedAt ? s.lastStartedAt : (s && s.startedAt ? s.startedAt : null),
+      startCount: s && s.startCount ? s.startCount : 0,
+      accumulatedMs,
+      userTotalMs
+    };
+  });
+
   return {
     id: String(room._id), code: room.code, name: room.name,
     owner: room.owner ? String(room.owner) : "",
-    memberCount: (room.members || []).length,
-    members: userNames.map(u => {
-      const s = statuses.find(st => st && st.userId && String(st.userId) === u.id);
-      return {
-        ...u,
-        active: !!(s && s.active),
-        startedAt: s && s.startedAt ? s.startedAt : null,
-        lastStartedAt: s && s.lastStartedAt ? s.lastStartedAt : (s && s.startedAt ? s.startedAt : null),
-        startCount: s && s.startCount ? s.startCount : 0,
-        accumulatedMs: s && s.accumulatedMs ? s.accumulatedMs : 0
-      };
-    }),
-    isRunning: !!room.isRunning,
-    accumulatedMs: room.accumulatedMs || 0,
-    totalMs,
-    activeStartedAt: room.activeStartedAt,
+    memberCount: members.length,
+    members: mappedMembers,
+    sharedTotalMs,
+    bothActive: !!room.bothActiveStartedAt,
+    bothActiveStartedAt: room.bothActiveStartedAt,
+    bothActiveAccumulatedMs: room.bothActiveAccumulatedMs || 0,
     dailyGoalMinutes: room.dailyGoalMinutes || 120,
     weeklyGoalHours: room.weeklyGoalHours || 20,
     createdAt: room.createdAt
@@ -135,13 +168,23 @@ async function broadcastRoom(room) {
   io.to(`room:${room.code}`).emit("room:update", roomPayload(room, names));
 }
 async function totalRoomMs(room) {
-  return Math.max(0, (room.accumulatedMs || 0) + (room.isRunning && room.activeStartedAt ? Date.now() - new Date(room.activeStartedAt).getTime() : 0));
+  const runningSharedMs = room.bothActiveStartedAt
+    ? Math.max(0, Date.now() - new Date(room.bothActiveStartedAt).getTime()) : 0;
+  return Math.max(0, (room.bothActiveAccumulatedMs || 0) + runningSharedMs);
 }
 async function persistRunningTime(room) {
-  if (room.isRunning && room.activeStartedAt) {
-    room.accumulatedMs = (room.accumulatedMs || 0) + Math.max(0, Date.now() - new Date(room.activeStartedAt).getTime());
-    room.activeStartedAt = new Date();
+  if (room.bothActiveStartedAt) {
+    const elapsed = Math.max(0, Date.now() - new Date(room.bothActiveStartedAt).getTime());
+    room.bothActiveAccumulatedMs = (room.bothActiveAccumulatedMs || 0) + elapsed;
+    room.bothActiveStartedAt = new Date();
   }
+  (room.statuses || []).forEach(s => {
+    if (s && s.active && s.startedAt) {
+      const elapsed = Math.max(0, Date.now() - new Date(s.startedAt).getTime());
+      s.accumulatedMs = (s.accumulatedMs || 0) + elapsed;
+      s.startedAt = new Date();
+    }
+  });
 }
 function generateCode() {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
@@ -225,6 +268,7 @@ app.post("/api/rooms/join", auth, async (req, res) => {
       room.members.push(req.user.id);
       room.statuses.push({ userId: req.user.id, active: false, startedAt: null, startCount: 0, accumulatedMs: 0 });
     }
+    updateBothActiveState(room);
     await room.save();
     res.json({ room: roomPayload(room, await memberNames(room)) });
     await broadcastRoom(room);
@@ -263,10 +307,7 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
         status.startCount = (status.startCount || 0) + 1;
       }
       room.events.push({ userId: req.user.id, type: "start", at: new Date() });
-      if (!room.isRunning) {
-        room.isRunning = true;
-        room.activeStartedAt = new Date();
-      }
+      updateBothActiveState(room);
     } else if (action === "pause") {
       let status = room.statuses.find(s => s && s.userId && String(s.userId) === String(req.user.id));
       if (status && status.active) {
@@ -277,19 +318,31 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
         status.active = false;
         status.startedAt = null;
       }
-      const anyActive = room.statuses.some(s => s && s.active);
-      if (!anyActive && room.isRunning) {
-        await persistRunningTime(room);
-        room.isRunning = false;
-        room.activeStartedAt = null;
-      }
       room.events.push({ userId: req.user.id, type: "pause", at: new Date() });
+      updateBothActiveState(room);
     } else if (action === "finish") {
-      if (room.isRunning) await persistRunningTime(room);
-      const duration = Math.floor((room.accumulatedMs || 0) / 1000);
+      await persistRunningTime(room);
+      const sharedDuration = Math.floor((room.bothActiveAccumulatedMs || 0) / 1000);
+      let maxUserDuration = 0;
+      (room.statuses || []).forEach(s => {
+        if (s && s.accumulatedMs) {
+          const d = Math.floor(s.accumulatedMs / 1000);
+          if (d > maxUserDuration) maxUserDuration = d;
+        }
+      });
+
+      const duration = Math.max(sharedDuration, maxUserDuration);
       if (duration > 0) {
-        await StudySession.create({ room: room._id, startedAt: new Date(Date.now() - duration * 1000), endedAt: new Date(), durationSeconds: duration, members: room.members });
+        await StudySession.create({
+          room: room._id,
+          startedAt: new Date(Date.now() - duration * 1000),
+          endedAt: new Date(),
+          durationSeconds: duration,
+          members: room.members
+        });
       }
+      room.bothActiveAccumulatedMs = 0;
+      room.bothActiveStartedAt = null;
       room.accumulatedMs = 0;
       room.activeStartedAt = null;
       room.isRunning = false;
@@ -332,9 +385,7 @@ app.delete("/api/rooms/:code/members/:targetUserId", auth, async (req, res) => {
     }
     room.members = room.members.filter(m => m && String(m) !== targetUserId);
     room.statuses = (room.statuses || []).filter(s => s && s.userId && String(s.userId) !== targetUserId);
-    if (room.isRunning) {
-      await persistRunningTime(room);
-    }
+    updateBothActiveState(room);
     await room.save();
     await broadcastRoom(room);
     res.json({ room: roomPayload(room, await memberNames(room)) });
