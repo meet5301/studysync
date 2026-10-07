@@ -132,36 +132,78 @@ async function openRoom(code) {
 function durationText(seconds, compact = false) {
   seconds = Math.max(0, Math.floor(seconds));
   const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
-  if (compact) return h ? `${h}h ${m}m` : `${m}m`;
+  if (compact) {
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
-function currentMs() {
-  if (!state.room) return 0;
-  let ms = Number(state.room.accumulatedMs || 0);
-  if (state.room.isRunning && state.room.activeStartedAt) {
-    const elapsed = Date.now() - new Date(state.room.activeStartedAt).getTime();
-    if (elapsed > 0) ms += elapsed;
+function getUserMs(userObj) {
+  if (!userObj) return 0;
+  let ms = Number(userObj.accumulatedMs || 0);
+  if (userObj.active && userObj.startedAt) {
+    const startTime = new Date(userObj.startedAt).getTime();
+    if (!isNaN(startTime)) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > 0) ms += elapsed;
+    }
   }
   return ms;
+}
+function getMyMs() {
+  if (!state.room || !state.room.members || !state.user) return 0;
+  const myId = String(state.user.id || state.user._id || "");
+  const me = state.room.members.find(m => String(m.id || m._id || "") === myId);
+  return getUserMs(me);
+}
+function getBuddyMs() {
+  if (!state.room || !state.room.members || !state.user) return 0;
+  const myId = String(state.user.id || state.user._id || "");
+  const buddy = state.room.members.find(m => String(m.id || m._id || "") !== myId);
+  return getUserMs(buddy);
+}
+function getSharedMs() {
+  if (!state.room) return 0;
+  let ms = Number(state.room.bothActiveAccumulatedMs || 0);
+  if (state.room.bothActive && state.room.bothActiveStartedAt) {
+    const startTime = new Date(state.room.bothActiveStartedAt).getTime();
+    if (!isNaN(startTime)) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > 0) ms += elapsed;
+    }
+  }
+  if (!ms && state.room.sharedTotalMs) ms = Number(state.room.sharedTotalMs);
+  return ms;
+}
+function formatTime(dateVal) {
+  if (!dateVal) return "Not started";
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return "Not started";
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 function renderRoom() {
   if (!state.room) return;
   const r = state.room, members = r.members || [];
-  const buddy = members.find(m => m.id !== state.user.id);
-  const isOwner = String(r.owner) === String(state.user.id);
+  const myId = String(state.user?.id || state.user?._id || "");
+  const me = members.find(m => String(m.id || m._id || "") === myId);
+  const buddy = members.find(m => String(m.id || m._id || "") !== myId);
+  const isOwner = String(r.owner) === myId;
+  const myActive = !!(me && me.active);
+  const buddyActive = !!(buddy && buddy.active);
+  const myStartCount = me ? (me.startCount || 0) : 0;
+  const buddyStartCount = buddy ? (buddy.startCount || 0) : 0;
+  const mySec = Math.floor(getMyMs() / 1000);
+  const buddySec = Math.floor(getBuddyMs() / 1000);
+  const sharedSec = Math.floor(getSharedMs() / 1000);
+
   $("#room-name").textContent = r.name; $("#room-code").textContent = r.code;
-  $("#room-status").textContent = r.isRunning ? "Shared focus is growing" : (buddy ? "Ready when you both are" : "Invite your buddy to begin");
   $("#buddy-name").textContent = buddy ? buddy.name : "Your study buddy";
   $("#buddy-avatar").textContent = buddy ? buddy.name[0].toUpperCase() : "♡";
-  const meStatus = members.find(m => m.id === state.user.id);
-  const buddyActive = !!(buddy && buddy.active);
-  const myActive = !!(meStatus && meStatus.active);
-  $("#buddy-state").textContent = buddy ? (buddyActive ? (r.isRunning ? "Focusing with you" : "Ready — waiting for you") : "Not studying right now") : "Waiting to join";
-  $("#my-state").textContent = myActive ? (r.isRunning ? "Focus session in progress" : "Ready — waiting for your buddy") : "Ready when you are";
-  $("#my-pill").textContent = myActive ? (r.isRunning ? "Focusing" : "Ready") : "Not started";
-  $("#my-pill").className = "status-pill " + (r.isRunning && myActive ? "live" : (myActive ? "paused" : "idle"));
-  $("#buddy-pill").textContent = buddy ? (buddyActive ? (r.isRunning ? "Focusing" : "Ready") : "Not started") : "Waiting";
-  $("#buddy-pill").className = "status-pill " + (r.isRunning && buddyActive ? "live" : (buddyActive ? "paused" : "idle"));
+
+  $("#my-start-count").textContent = `▶ Started ${myStartCount} time${myStartCount === 1 ? "" : "s"}`;
+  $("#buddy-start-count").textContent = buddy ? `▶ Started ${buddyStartCount} time${buddyStartCount === 1 ? "" : "s"}` : "▶ Waiting to join";
+
   const kickBtn = $("#kick-buddy-btn");
   if (kickBtn) {
     if (isOwner && buddy) {
@@ -174,14 +216,95 @@ function renderRoom() {
   }
   $("#start-btn").classList.toggle("hidden", myActive);
   $("#pause-btn").classList.toggle("hidden", !myActive);
-  $("#finish-btn").classList.toggle("hidden", !r.totalMs && !r.isRunning);
-  $("#timer-label").textContent = r.isRunning ? "GROWING TOGETHER" : (myActive || (buddy && buddyActive) ? "WAITING FOR BOTH" : (r.totalMs ? "SESSION PAUSED" : "READY TO FOCUS"));
-  $("#timer-hint").textContent = r.isRunning ? "Lovely work. Your shared water is growing." : (myActive || (buddy && buddyActive) ? "The water starts when everyone in this room is ready." : "You both need to start for shared progress to grow.");
+  $("#finish-btn").classList.toggle("hidden", !mySec && !buddySec && !sharedSec && !myActive && !buddyActive);
+
+  if (myActive && buddyActive) {
+    $("#timer-label").textContent = "FOCUSING TOGETHER 🌿";
+    $("#timer-hint").textContent = "Both timers are running! Shared water is filling the glass 🌊";
+  } else if (myActive) {
+    $("#timer-label").textContent = "MY TIMER RUNNING 🌱";
+    $("#timer-hint").textContent = "Your timer is active. Waiting for buddy to start to fill the glass together 🌿";
+  } else if (buddyActive) {
+    $("#timer-label").textContent = "BUDDY STUDYING ⚡";
+    $("#timer-hint").textContent = `${buddy ? buddy.name : "Buddy"}'s timer is active! Click Start timer to join them.`;
+  } else {
+    $("#timer-label").textContent = mySec > 0 ? "SESSION PAUSED" : "STOPPED";
+    $("#timer-hint").textContent = "Click Start timer to begin focusing.";
+  }
   renderTimer(); renderWater();
 }
-function renderTimer() { if (state.room) $("#timer-display").textContent = durationText(currentMs()/1000); }
+function renderTimer() {
+  if (!state.room) return;
+  const r = state.room, members = r.members || [];
+  const myId = String(state.user?.id || state.user?._id || "");
+  const me = members.find(m => String(m.id || m._id || "") === myId);
+  const buddy = members.find(m => String(m.id || m._id || "") !== myId);
+
+  const myMs = getMyMs();
+  const mySec = Math.floor(myMs / 1000);
+  $("#timer-display").textContent = durationText(mySec);
+
+  const myActive = !!(me && me.active);
+  const myPill = $("#my-pill");
+  const myStatusChip = $("#my-status-chip");
+  const myTimerTime = $("#my-timer-time");
+  const myStartTime = $("#my-start-time");
+
+  if (myActive) {
+    if (myPill) { myPill.textContent = "Timer Started"; myPill.className = "status-pill live"; }
+    if (myStatusChip) { myStatusChip.textContent = `🟢 Timer Started (${durationText(mySec, true)})`; myStatusChip.className = "timer-status-chip live"; }
+    if (myTimerTime) myTimerTime.textContent = `⏱️ ${durationText(mySec)}`;
+    if (myStartTime) myStartTime.textContent = `🕒 Started at ${formatTime(me.startedAt)}`;
+  } else if (me && mySec > 0) {
+    if (myPill) { myPill.textContent = "Timer Paused"; myPill.className = "status-pill paused"; }
+    if (myStatusChip) { myStatusChip.textContent = `⏸️ Paused (${durationText(mySec, true)})`; myStatusChip.className = "timer-status-chip paused"; }
+    if (myTimerTime) myTimerTime.textContent = `⏱️ ${durationText(mySec)} (Paused)`;
+    if (myStartTime) myStartTime.textContent = `🕒 Last started at ${formatTime(me.lastStartedAt || me.startedAt)}`;
+  } else {
+    if (myPill) { myPill.textContent = "Timer Stopped"; myPill.className = "status-pill idle"; }
+    if (myStatusChip) { myStatusChip.textContent = `⚪ Stopped (${durationText(mySec, true)})`; myStatusChip.className = "timer-status-chip idle"; }
+    if (myTimerTime) myTimerTime.textContent = `⏱️ ${durationText(mySec)}`;
+    if (myStartTime) myStartTime.textContent = me && me.lastStartedAt ? `🕒 Last started at ${formatTime(me.lastStartedAt)}` : "🕒 Not started";
+  }
+
+  // Buddy timer metrics
+  const buddyMs = getBuddyMs();
+  const buddySec = Math.floor(buddyMs / 1000);
+  const buddyActive = !!(buddy && buddy.active);
+
+  const buddyPill = $("#buddy-pill");
+  const buddyStatusChip = $("#buddy-status-chip");
+  const buddyTimerTime = $("#buddy-timer-time");
+  const buddyStartTime = $("#buddy-start-time");
+
+  if (buddy && buddyActive) {
+    if (buddyPill) { buddyPill.textContent = "Timer Started"; buddyPill.className = "status-pill live"; }
+    if (buddyStatusChip) { buddyStatusChip.textContent = `🟢 Timer Started (${durationText(buddySec, true)})`; buddyStatusChip.className = "timer-status-chip live"; }
+    if (buddyTimerTime) buddyTimerTime.textContent = `⏱️ ${durationText(buddySec)}`;
+    if (buddyStartTime) buddyStartTime.textContent = `🕒 Started at ${formatTime(buddy.startedAt)}`;
+    $("#room-status").textContent = `🟢 ${buddy.name} is focusing (${durationText(buddySec, true)})`;
+  } else if (buddy && buddySec > 0) {
+    if (buddyPill) { buddyPill.textContent = "Timer Paused"; buddyPill.className = "status-pill paused"; }
+    if (buddyStatusChip) { buddyStatusChip.textContent = `⏸️ Paused (${durationText(buddySec, true)})`; buddyStatusChip.className = "timer-status-chip paused"; }
+    if (buddyTimerTime) buddyTimerTime.textContent = `⏱️ ${durationText(buddySec)} (Paused)`;
+    if (buddyStartTime) buddyStartTime.textContent = `🕒 Last started at ${formatTime(buddy.lastStartedAt || buddy.startedAt)}`;
+    $("#room-status").textContent = `⏸️ ${buddy.name}'s timer is paused (${durationText(buddySec, true)})`;
+  } else if (buddy) {
+    if (buddyPill) { buddyPill.textContent = "Timer Stopped"; buddyPill.className = "status-pill idle"; }
+    if (buddyStatusChip) { buddyStatusChip.textContent = `⚪ Stopped (${durationText(buddySec, true)})`; buddyStatusChip.className = "timer-status-chip idle"; }
+    if (buddyTimerTime) buddyTimerTime.textContent = `⏱️ ${durationText(buddySec)}`;
+    if (buddyStartTime) buddyStartTime.textContent = buddy.lastStartedAt ? `🕒 Last started at ${formatTime(buddy.lastStartedAt)}` : "🕒 Not started";
+    $("#room-status").textContent = `⚪ ${buddy.name}'s timer is stopped`;
+  } else {
+    if (buddyPill) { buddyPill.textContent = "Waiting"; buddyPill.className = "status-pill idle"; }
+    if (buddyStatusChip) { buddyStatusChip.textContent = "⚪ Waiting to join"; buddyStatusChip.className = "timer-status-chip idle"; }
+    if (buddyTimerTime) buddyTimerTime.textContent = "⏱️ 00:00:00";
+    if (buddyStartTime) buddyStartTime.textContent = "🕒 Waiting to join";
+    $("#room-status").textContent = "Waiting for your buddy";
+  }
+}
 function renderWater() {
-  const ms = currentMs(), mins = ms / 60000;
+  const ms = getSharedMs(), mins = ms / 60000;
   const dailyGoal = state.room.dailyGoalMinutes || 120, weeklyGoal = state.room.weeklyGoalHours || 20;
   const dayPct = Math.min(100, mins / dailyGoal * 100);
   const weekMins = state.stats ? state.stats.weekSeconds / 60 : mins;
@@ -195,10 +318,24 @@ function renderWater() {
   $("#water-wave").setAttribute("d", `M 25 ${y+3} Q 48 ${y-5} 72 ${y+3} T 120 ${y+3} T 165 ${y+3} L 165 220 L 25 220 Z`);
   $("#glass-stage").textContent = dayPct >= 100 ? "DAILY GLASS COMPLETE ✨" : "THE DAILY GLASS";
   $("#water-percent").textContent = `${Math.round(glassPct)}%`;
-  $("#water-caption").textContent = dayPct >= 100 ? "You showed up for your goal. Beautiful work!" : `${Math.max(0, Math.ceil(dailyGoal-mins))} shared minutes to fill today's glass.`;
-  $("#today-time").textContent = durationText((state.stats?.todaySeconds || 0), true);
-  $("#week-time").textContent = durationText((state.stats?.weekSeconds || 0), true);
-  $("#all-time").textContent = durationText((state.stats?.allSeconds || 0), true);
+
+  const me = state.room?.members?.find(m => m.id === state.user?.id);
+  const buddy = state.room?.members?.find(m => m.id !== state.user?.id);
+  const bothActive = me && me.active && buddy && buddy.active;
+
+  if (dayPct >= 100) {
+    $("#water-caption").textContent = "You showed up for your goal. Beautiful work!";
+  } else if (bothActive) {
+    $("#water-caption").textContent = `✨ Both timers active! ${Math.max(0, Math.ceil(dailyGoal - mins))} minutes left to fill today's glass.`;
+  } else if (me && me.active) {
+    $("#water-caption").textContent = `Your timer is active. Water fills when both you and ${buddy ? buddy.name : "your buddy"} study together.`;
+  } else {
+    $("#water-caption").textContent = `${Math.max(0, Math.ceil(dailyGoal - mins))} shared minutes to fill today's glass.`;
+  }
+
+  $("#today-time").textContent = durationText((state.stats?.todaySeconds || 0) + (ms / 1000), true);
+  $("#week-time").textContent = durationText((state.stats?.weekSeconds || 0) + (ms / 1000), true);
+  $("#all-time").textContent = durationText((state.stats?.allSeconds || 0) + (ms / 1000), true);
   $("#daily-progress").style.width = `${dayPct}%`; $("#daily-percent").textContent = `${Math.round(dayPct)}%`;
   $("#weekly-progress").style.width = `${weekPct}%`; $("#weekly-percent").textContent = `${Math.round(weekPct)}%`;
   $("#monthly-progress").style.width = `${monthPct}%`; $("#monthly-percent").textContent = `${Math.round(monthPct)}%`;
@@ -227,7 +364,7 @@ async function timerAction(action) {
     const { room } = await api(`/api/rooms/${state.room.code}/timer`, { method: "POST", body: JSON.stringify({ action }) });
     state.room = room; renderRoom();
     if (action === "finish") { await refreshStats(); toast("Session saved. Every little bit counts 🌷"); }
-    else toast(action === "start" ? "Let's focus together 🌱" : "Timer paused. Take a gentle break.");
+    else toast(action === "start" ? "Your timer started 🌱" : "Your timer paused.");
   } catch (e) { toast(e.message, true); }
 }
 $("#start-btn").addEventListener("click", () => timerAction("start"));
@@ -258,5 +395,5 @@ $("#settings-form").addEventListener("submit", async e => {
     state.room = room; renderRoom(); toast("Your garden goals have been saved 🌿");
   } catch (err) { toast(err.message, true); }
 });
-setInterval(() => { if (state.room && state.room.isRunning) { renderTimer(); renderWater(); } }, 1000);
+setInterval(() => { if (state.room) { renderTimer(); renderWater(); } }, 1000);
 if (state.token) loadDashboard(); else showAuth();
