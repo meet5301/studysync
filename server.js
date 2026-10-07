@@ -135,6 +135,8 @@ function roomPayload(room, userNames = []) {
     };
   });
 
+  const isAnyActive = statuses.some(s => s && s.active);
+
   return {
     id: String(room._id), code: room.code, name: room.name,
     owner: room.owner ? String(room.owner) : "",
@@ -144,6 +146,8 @@ function roomPayload(room, userNames = []) {
     bothActive: !!room.bothActiveStartedAt,
     bothActiveStartedAt: room.bothActiveStartedAt,
     bothActiveAccumulatedMs: room.bothActiveAccumulatedMs || 0,
+    isRunning: isAnyActive || !!room.bothActiveStartedAt,
+    accumulatedMs: sharedTotalMs,
     dailyGoalMinutes: room.dailyGoalMinutes || 120,
     weeklyGoalHours: room.weeklyGoalHours || 20,
     createdAt: room.createdAt
