@@ -41,6 +41,7 @@ const roomSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     active: { type: Boolean, default: false },
     startedAt: { type: Date, default: null },
+    lastStartedAt: { type: Date, default: null },
     startCount: { type: Number, default: 0 },
     accumulatedMs: { type: Number, default: 0 }
   }],
@@ -101,6 +102,7 @@ function roomPayload(room, userNames = []) {
         ...u,
         active: !!(s && s.active),
         startedAt: s && s.startedAt ? s.startedAt : null,
+        lastStartedAt: s && s.lastStartedAt ? s.lastStartedAt : (s && s.startedAt ? s.startedAt : null),
         startCount: s && s.startCount ? s.startCount : 0,
         accumulatedMs: s && s.accumulatedMs ? s.accumulatedMs : 0
       };
@@ -250,12 +252,14 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
 
     if (action === "start") {
       let status = room.statuses.find(s => s && s.userId && String(s.userId) === String(req.user.id));
+      const now = new Date();
       if (!status) {
-        status = { userId: req.user.id, active: true, startedAt: new Date(), startCount: 1, accumulatedMs: 0 };
+        status = { userId: req.user.id, active: true, startedAt: now, lastStartedAt: now, startCount: 1, accumulatedMs: 0 };
         room.statuses.push(status);
       } else {
         status.active = true;
-        status.startedAt = new Date();
+        status.startedAt = now;
+        status.lastStartedAt = now;
         status.startCount = (status.startCount || 0) + 1;
       }
       room.events.push({ userId: req.user.id, type: "start", at: new Date() });
@@ -293,6 +297,7 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
         if (s) {
           s.active = false;
           s.startedAt = null;
+          s.lastStartedAt = null;
           s.accumulatedMs = 0;
           s.startCount = 0;
         }
