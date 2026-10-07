@@ -46,7 +46,7 @@ const roomSchema = new mongoose.Schema({
   weeklyGoalHours: { type: Number, default: 20 },
   events: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    type: String,
+    type: { type: String },
     at: { type: Date, default: Date.now }
   }]
 }, { minimize: false });
