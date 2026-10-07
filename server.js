@@ -37,7 +37,13 @@ const roomSchema = new mongoose.Schema({
   name: { type: String, default: "Our little study garden" },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-  statuses: [{ userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, active: { type: Boolean, default: false } }],
+  statuses: [{
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    active: { type: Boolean, default: false },
+    startedAt: { type: Date, default: null },
+    startCount: { type: Number, default: 0 },
+    accumulatedMs: { type: Number, default: 0 }
+  }],
   createdAt: { type: Date, default: Date.now },
   activeStartedAt: { type: Date, default: null },
   accumulatedMs: { type: Number, default: 0 },
@@ -89,10 +95,16 @@ function roomPayload(room, userNames = []) {
     id: String(room._id), code: room.code, name: room.name,
     owner: room.owner ? String(room.owner) : "",
     memberCount: (room.members || []).length,
-    members: userNames.map(u => ({
-      ...u,
-      active: statuses.some(s => s && s.userId && String(s.userId) === u.id && s.active)
-    })),
+    members: userNames.map(u => {
+      const s = statuses.find(st => st && st.userId && String(st.userId) === u.id);
+      return {
+        ...u,
+        active: !!(s && s.active),
+        startedAt: s && s.startedAt ? s.startedAt : null,
+        startCount: s && s.startCount ? s.startCount : 0,
+        accumulatedMs: s && s.accumulatedMs ? s.accumulatedMs : 0
+      };
+    }),
     isRunning: !!room.isRunning,
     accumulatedMs: room.accumulatedMs || 0,
     totalMs,
@@ -185,7 +197,7 @@ app.post("/api/rooms", auth, async (req, res) => {
     }
     const room = await Room.create({
       code, name: String(req.body.name || "Our little study garden").trim().slice(0, 60),
-      owner: user._id, members: [user._id], statuses: [{ userId: user._id, active: false }],
+      owner: user._id, members: [user._id], statuses: [{ userId: user._id, active: false, startedAt: null, startCount: 0, accumulatedMs: 0 }],
       dailyGoalMinutes: Math.min(720, Math.max(15, Number(req.body.dailyGoalMinutes) || 120)),
       weeklyGoalHours: Math.min(100, Math.max(1, Number(req.body.weeklyGoalHours) || 20))
     });
@@ -209,7 +221,7 @@ app.post("/api/rooms/join", auth, async (req, res) => {
     if (!already && room.members.length >= 2) return res.status(400).json({ error: "This room is full (2 members maximum)." });
     if (!already) {
       room.members.push(req.user.id);
-      room.statuses.push({ userId: req.user.id, active: false });
+      room.statuses.push({ userId: req.user.id, active: false, startedAt: null, startCount: 0, accumulatedMs: 0 });
     }
     await room.save();
     res.json({ room: roomPayload(room, await memberNames(room)) });
@@ -239,23 +251,30 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
     if (action === "start") {
       let status = room.statuses.find(s => s && s.userId && String(s.userId) === String(req.user.id));
       if (!status) {
-        status = { userId: req.user.id, active: true };
+        status = { userId: req.user.id, active: true, startedAt: new Date(), startCount: 1, accumulatedMs: 0 };
         room.statuses.push(status);
       } else {
         status.active = true;
+        status.startedAt = new Date();
+        status.startCount = (status.startCount || 0) + 1;
       }
       room.events.push({ userId: req.user.id, type: "start", at: new Date() });
-      const allActive = room.members.length >= 1 && room.members.every(memberId =>
-        room.statuses.some(s => s && s.userId && String(s.userId) === String(memberId) && s.active)
-      );
-      if (allActive && !room.isRunning) {
+      if (!room.isRunning) {
         room.isRunning = true;
         room.activeStartedAt = new Date();
       }
     } else if (action === "pause") {
       let status = room.statuses.find(s => s && s.userId && String(s.userId) === String(req.user.id));
-      if (status) status.active = false;
-      if (room.isRunning) {
+      if (status && status.active) {
+        if (status.startedAt) {
+          const elapsed = Date.now() - new Date(status.startedAt).getTime();
+          status.accumulatedMs = (status.accumulatedMs || 0) + Math.max(0, elapsed);
+        }
+        status.active = false;
+        status.startedAt = null;
+      }
+      const anyActive = room.statuses.some(s => s && s.active);
+      if (!anyActive && room.isRunning) {
         await persistRunningTime(room);
         room.isRunning = false;
         room.activeStartedAt = null;
@@ -270,7 +289,14 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
       room.accumulatedMs = 0;
       room.activeStartedAt = null;
       room.isRunning = false;
-      room.statuses.forEach(s => { if (s) s.active = false; });
+      room.statuses.forEach(s => {
+        if (s) {
+          s.active = false;
+          s.startedAt = null;
+          s.accumulatedMs = 0;
+          s.startCount = 0;
+        }
+      });
       room.events.push({ userId: req.user.id, type: "finish", at: new Date() });
     } else {
       return res.status(400).json({ error: "Unknown timer action." });
