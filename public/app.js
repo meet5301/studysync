@@ -306,23 +306,45 @@ function renderTimer() {
   }
 }
 function renderWater() {
-  const ms = getSharedMs(), mins = ms / 60000;
-  const dailyGoal = state.room.dailyGoalMinutes || 120, weeklyGoal = state.room.weeklyGoalHours || 20;
-  const dayPct = Math.min(100, mins / dailyGoal * 100);
-  const weekMins = state.stats ? state.stats.weekSeconds / 60 : mins;
-  const weekPct = Math.min(100, weekMins / (weeklyGoal * 60) * 100);
+  if (!state.room) return;
+  const currentSharedSec = Math.floor(getSharedMs() / 1000);
+
+  const baseTodaySec = state.stats?.baseTodaySeconds !== undefined
+    ? state.stats.baseTodaySeconds
+    : Math.max(0, (state.stats?.todaySeconds || 0) - (state.stats?.currentSharedSeconds || 0));
+  const baseWeekSec = state.stats?.baseWeekSeconds !== undefined
+    ? state.stats.baseWeekSeconds
+    : Math.max(0, (state.stats?.weekSeconds || 0) - (state.stats?.currentSharedSeconds || 0));
+  const baseAllSec = state.stats?.baseAllSeconds !== undefined
+    ? state.stats.baseAllSeconds
+    : Math.max(0, (state.stats?.allSeconds || 0) - (state.stats?.currentSharedSeconds || 0));
+
+  const totalTodaySec = Math.max(0, baseTodaySec + currentSharedSec);
+  const totalWeekSec = Math.max(0, baseWeekSec + currentSharedSec);
+  const totalAllSec = Math.max(0, baseAllSec + currentSharedSec);
+
+  const mins = totalTodaySec / 60;
+  const dailyGoal = state.room.dailyGoalMinutes || 120;
+  const weeklyGoal = state.room.weeklyGoalHours || 20;
+
+  const dayPct = Math.min(100, (mins / dailyGoal) * 100);
+  const weekMins = totalWeekSec / 60;
+  const weekPct = Math.min(100, (weekMins / (weeklyGoal * 60)) * 100);
   const monthlyGoal = weeklyGoal * 60 * 4;
-  const monthMins = state.stats ? state.stats.allSeconds / 60 : mins;
-  const monthPct = Math.min(100, monthMins / monthlyGoal * 100);
+  const monthMins = totalAllSec / 60;
+  const monthPct = Math.min(100, (monthMins / monthlyGoal) * 100);
+
   const glassPct = Math.min(100, dayPct);
-  const height = 175 * glassPct / 100, y = 205 - height;
+  const height = (175 * glassPct) / 100;
+  const y = 205 - height;
   $("#water-fill").setAttribute("y", y); $("#water-fill").setAttribute("height", height);
   $("#water-wave").setAttribute("d", `M 25 ${y+3} Q 48 ${y-5} 72 ${y+3} T 120 ${y+3} T 165 ${y+3} L 165 220 L 25 220 Z`);
   $("#glass-stage").textContent = dayPct >= 100 ? "DAILY GLASS COMPLETE ✨" : "THE DAILY GLASS";
   $("#water-percent").textContent = `${Math.round(glassPct)}%`;
 
-  const me = state.room?.members?.find(m => m.id === state.user?.id);
-  const buddy = state.room?.members?.find(m => m.id !== state.user?.id);
+  const myId = String(state.user?.id || state.user?._id || "");
+  const me = state.room?.members?.find(m => String(m.id || m._id || "") === myId);
+  const buddy = state.room?.members?.find(m => String(m.id || m._id || "") !== myId);
   const bothActive = me && me.active && buddy && buddy.active;
 
   if (dayPct >= 100) {
@@ -335,15 +357,16 @@ function renderWater() {
     $("#water-caption").textContent = `${Math.max(0, Math.ceil(dailyGoal - mins))} shared minutes to fill today's glass.`;
   }
 
-  $("#today-time").textContent = durationText((state.stats?.todaySeconds || 0) + (ms / 1000), true);
-  $("#week-time").textContent = durationText((state.stats?.weekSeconds || 0) + (ms / 1000), true);
-  $("#all-time").textContent = durationText((state.stats?.allSeconds || 0) + (ms / 1000), true);
+  $("#today-time").textContent = durationText(totalTodaySec, true);
+  $("#week-time").textContent = durationText(totalWeekSec, true);
+  $("#all-time").textContent = durationText(totalAllSec, true);
+
   $("#daily-progress").style.width = `${dayPct}%`; $("#daily-percent").textContent = `${Math.round(dayPct)}%`;
   $("#weekly-progress").style.width = `${weekPct}%`; $("#weekly-percent").textContent = `${Math.round(weekPct)}%`;
   $("#monthly-progress").style.width = `${monthPct}%`; $("#monthly-percent").textContent = `${Math.round(monthPct)}%`;
   $("#daily-milestone-text").textContent = `${Math.round(mins)} of ${dailyGoal} shared minutes`;
-  $("#weekly-milestone-text").textContent = `${Math.round(weekMins/60*10)/10} of ${weeklyGoal} shared hours`;
-  $("#monthly-milestone-text").textContent = `${Math.round(monthMins/60*10)/10} of ${weeklyGoal*4} shared hours`;
+  $("#weekly-milestone-text").textContent = `${Math.round((weekMins / 60) * 10) / 10} of ${weeklyGoal} shared hours`;
+  $("#monthly-milestone-text").textContent = `${Math.round((monthMins / 60) * 10) / 10} of ${weeklyGoal * 4} shared hours`;
 }
 async function refreshStats() {
   if (!state.room) return;
@@ -404,5 +427,21 @@ $("#settings-form").addEventListener("submit", async e => {
     state.room = room; renderRoom(); toast("Your garden goals have been saved 🌿");
   } catch (err) { toast(err.message, true); }
 });
-setInterval(() => { if (state.room) { renderTimer(); renderWater(); } }, 1000);
+
+let lastDayStr = new Date().toDateString();
+setInterval(() => {
+  if (state.room) {
+    const currentDayStr = new Date().toDateString();
+    if (currentDayStr !== lastDayStr) {
+      lastDayStr = currentDayStr;
+      const todayEl = $("#today-date");
+      if (todayEl) {
+        todayEl.textContent = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(new Date());
+      }
+      refreshStats();
+    }
+    renderTimer();
+    renderWater();
+  }
+}, 1000);
 if (state.token) loadDashboard(); else showAuth();

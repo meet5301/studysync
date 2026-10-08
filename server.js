@@ -53,6 +53,7 @@ const roomSchema = new mongoose.Schema({
   isRunning: { type: Boolean, default: false },
   dailyGoalMinutes: { type: Number, default: 120 },
   weeklyGoalHours: { type: Number, default: 20 },
+  lastResetDate: { type: Date, default: Date.now },
   events: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     type: { type: String },
@@ -89,11 +90,40 @@ function auth(req, res, next) {
 function safeUser(user) {
   return { id: String(user._id), name: user.name, email: user.email };
 }
+function checkDailyReset(room) {
+  if (!room) return;
+  const now = new Date();
+  const getLocalDateStr = (d) => {
+    const dt = new Date(d);
+    return isNaN(dt.getTime()) ? "" : new Date(dt.getTime() - (dt.getTimezoneOffset() * 60000)).toISOString().slice(0, 10);
+  };
+  const todayStr = getLocalDateStr(now);
+  const lastResetStr = room.lastResetDate ? getLocalDateStr(room.lastResetDate) : todayStr;
+
+  if (todayStr && lastResetStr && todayStr !== lastResetStr) {
+    room.bothActiveAccumulatedMs = 0;
+    if (room.bothActiveStartedAt) {
+      room.bothActiveStartedAt = now;
+    }
+    (room.statuses || []).forEach(s => {
+      if (s) {
+        s.accumulatedMs = 0;
+        if (s.active && s.startedAt) {
+          s.startedAt = now;
+        }
+      }
+    });
+    room.lastResetDate = now;
+  }
+}
+
 function updateBothActiveState(room) {
+  checkDailyReset(room);
   const statuses = Array.isArray(room.statuses) ? room.statuses : [];
   const members = Array.isArray(room.members) ? room.members : [];
   const activeCount = statuses.filter(s => s && s.active).length;
-  const isBothActive = members.length >= 2 ? activeCount >= 2 : activeCount >= 1;
+  // Require at least 2 members AND both active to accumulate shared time
+  const isBothActive = members.length >= 2 && activeCount >= 2;
   const now = new Date();
 
   if (isBothActive) {
@@ -110,6 +140,7 @@ function updateBothActiveState(room) {
 }
 
 function roomPayload(room, userNames = []) {
+  checkDailyReset(room);
   const statuses = Array.isArray(room.statuses) ? room.statuses : [];
   const members = Array.isArray(room.members) ? room.members : [];
   const runningSharedMs = room.bothActiveStartedAt
@@ -156,6 +187,9 @@ async function getRoomForUser(code, userId) {
   if (!room.members || !room.members.some(m => m && String(m) === String(userId))) {
     return { error: "You are not a member of this room." };
   }
+  checkDailyReset(room);
+  updateBothActiveState(room);
+  await room.save();
   return { room };
 }
 async function memberNames(room) {
@@ -168,6 +202,7 @@ async function broadcastRoom(room) {
   io.to(`room:${room.code}`).emit("room:update", roomPayload(room, names));
 }
 async function totalRoomMs(room) {
+  checkDailyReset(room);
   const runningSharedMs = room.bothActiveStartedAt
     ? Math.max(0, Date.now() - new Date(room.bothActiveStartedAt).getTime()) : 0;
   return Math.max(0, (room.bothActiveAccumulatedMs || 0) + runningSharedMs);
@@ -323,21 +358,14 @@ app.post("/api/rooms/:code/timer", auth, async (req, res) => {
     } else if (action === "finish") {
       await persistRunningTime(room);
       const sharedDuration = Math.floor((room.bothActiveAccumulatedMs || 0) / 1000);
-      let maxUserDuration = 0;
-      (room.statuses || []).forEach(s => {
-        if (s && s.accumulatedMs) {
-          const d = Math.floor(s.accumulatedMs / 1000);
-          if (d > maxUserDuration) maxUserDuration = d;
-        }
-      });
 
-      const duration = Math.max(sharedDuration, maxUserDuration);
-      if (duration > 0) {
+      // Store room study session ONLY if shared time was accumulated together!
+      if (sharedDuration > 0) {
         await StudySession.create({
           room: room._id,
-          startedAt: new Date(Date.now() - duration * 1000),
+          startedAt: new Date(Date.now() - sharedDuration * 1000),
           endedAt: new Date(),
-          durationSeconds: duration,
+          durationSeconds: sharedDuration,
           members: room.members
         });
       }
@@ -418,23 +446,38 @@ app.get("/api/rooms/:code/stats", auth, async (req, res) => {
   const result = await getRoomForUser(req.params.code, req.user.id);
   if (result.error) return res.status(403).json({ error: result.error });
   const room = result.room;
+  checkDailyReset(room);
+  await room.save();
+
   const sessions = await StudySession.find({ room: room._id }).sort({ endedAt: -1 }).limit(100);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const startWeek = new Date(today);
-  startWeek.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const dayOfWeek = today.getDay();
+  const distToMon = (dayOfWeek + 6) % 7;
+  startWeek.setDate(today.getDate() - distToMon);
+
   let todaySeconds = 0, weekSeconds = 0, allSeconds = 0;
   sessions.forEach(s => {
     const end = s.endedAt || s.createdAt;
-    allSeconds += s.durationSeconds;
-    if (end >= today) todaySeconds += s.durationSeconds;
-    if (end >= startWeek) weekSeconds += s.durationSeconds;
+    const dur = Number(s.durationSeconds || 0);
+    allSeconds += dur;
+    if (end >= startWeek) weekSeconds += dur;
+    if (end >= today) todaySeconds += dur;
   });
-  const currentMs = await totalRoomMs(room);
+
+  const runningSharedMs = room.bothActiveStartedAt
+    ? Math.max(0, Date.now() - new Date(room.bothActiveStartedAt).getTime()) : 0;
+  const currentSharedSeconds = Math.floor(Math.max(0, (room.bothActiveAccumulatedMs || 0) + runningSharedMs) / 1000);
+
   res.json({
-    todaySeconds: todaySeconds + Math.min(currentMs / 1000, 86400),
-    weekSeconds: weekSeconds + currentMs / 1000,
-    allSeconds: allSeconds + currentMs / 1000,
+    baseTodaySeconds: todaySeconds,
+    baseWeekSeconds: weekSeconds,
+    baseAllSeconds: allSeconds,
+    todaySeconds: todaySeconds + currentSharedSeconds,
+    weekSeconds: weekSeconds + currentSharedSeconds,
+    allSeconds: allSeconds + currentSharedSeconds,
+    currentSharedSeconds: currentSharedSeconds,
     recentSessions: sessions.slice(0, 8).map(s => ({ endedAt: s.endedAt, durationSeconds: s.durationSeconds }))
   });
 });
